@@ -28,8 +28,7 @@ setInterval(() => { if(pageActive && pageRemaining>0) pageRemaining--; updatePag
 {% if faculties %}
 <div class="faculty-grid">
 {% for item in faculties %}
-<div class="faculty-card {% if item.recommended %}recommended{% endif %}">
-  {% if item.recommended %}<span class="badge">RECOMMENDED</span>{% endif %}
+<div class="faculty-card">
   <h2>{{ item.faculty.faculty_name }}</h2>
   <p><strong>Specialization:</strong> {{ item.faculty.specialization or 'Not specified' }}</p>
   <p><strong>Assigned:</strong> {{ item.assigned }} / {{ item.faculty.max_students }}</p>
