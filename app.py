@@ -459,7 +459,7 @@ def faculty_selection():
 
 @app.route("/review", methods=["POST"])
 def review_allocation():
-    """Show a final staff/guide confirmation screen before saving the allocation."""
+    """Show guide confirmation details on the same selection page; do not navigate to a separate page."""
     if not round_is_active():
         session.pop("reg_no", None)
         session.pop("specialization", None)
@@ -488,12 +488,24 @@ def review_allocation():
     session["selected_faculty_id"] = faculty.id
     settings = get_round_settings()
     remaining_seconds = max(0, int((settings.ends_at - datetime.utcnow()).total_seconds())) if settings.ends_at else 0
+    specs = [s.name for s in Specialization.query.order_by(Specialization.name).all()]
+    faculties = []
+    for item_faculty in Faculty.query.filter_by(status="Active").order_by(Faculty.faculty_name).all():
+        assigned_count = Allocation.query.filter_by(faculty_id=item_faculty.id).count()
+        available = max(item_faculty.max_students - assigned_count, 0)
+        if available > 0:
+            faculties.append({"faculty": item_faculty, "assigned": assigned_count, "available": available})
+
     return render_template(
-        "review.html",
+        "specialization.html",
         student=student,
-        faculty=faculty,
-        specialization=specialization_name,
+        specializations=specs,
+        selected_specialization=specialization_name,
+        faculties=faculties,
+        selected_faculty=faculty,
+        show_confirmation=True,
         confirmation_time=datetime.utcnow().strftime("%d-%m-%Y %H:%M:%S"),
+        saved_confirmation=False,
         timer_active=round_is_active(),
         remaining_seconds=remaining_seconds,
     )
@@ -504,8 +516,10 @@ def confirm_allocation():
     if not round_is_active():
         session.pop("reg_no", None)
         session.pop("specialization", None)
+        session.pop("selected_faculty_id", None)
         flash("The selection timer has ended. Your selection was not submitted.", "error")
         return redirect(url_for("index"))
+
     reg_no = session.get("reg_no")
     specialization_name = session.get("specialization")
     faculty_pk = request.form.get("faculty_id", type=int) or session.get("selected_faculty_id")
@@ -515,17 +529,32 @@ def confirm_allocation():
         return redirect(url_for("index"))
 
     try:
-        # PostgreSQL row-level lock is used when available. SQLite uses a transaction
-        # and the unique student allocation constraint as a second line of defense.
+        # A previous SELECT can autobegin a SQLAlchemy transaction. Roll it back
+        # before explicitly starting the allocation transaction.
+        db.session.rollback()
         with db.session.begin():
             student = db.session.execute(
-                select(Student).where(Student.reg_no == reg_no).with_for_update()
+                select(Student).where(func.lower(Student.reg_no) == reg_no.lower()).with_for_update()
             ).scalar_one_or_none()
             if not student:
                 raise ValueError("Student not found.")
             if student.allocation:
                 existing = student.allocation
-                return render_template("already_allocated.html", student=student, allocation=existing)
+                # The transaction remains valid; exit normally, then show the same page.
+                existing_faculty = existing.faculty
+                return render_template(
+                    "specialization.html",
+                    student=student,
+                    specializations=[s.name for s in Specialization.query.order_by(Specialization.name).all()],
+                    selected_specialization=existing.specialization,
+                    faculties=[],
+                    selected_faculty=existing_faculty,
+                    show_confirmation=True,
+                    confirmation_time=existing.allocated_at.strftime("%d-%m-%Y %H:%M:%S"),
+                    saved_confirmation=True,
+                    timer_active=round_is_active(),
+                    remaining_seconds=0,
+                )
 
             faculty = db.session.execute(
                 select(Faculty).where(Faculty.id == faculty_pk).with_for_update()
@@ -537,8 +566,7 @@ def confirm_allocation():
                 select(func.count(Allocation.id)).where(Allocation.faculty_id == faculty.id)
             ).scalar_one()
             if assigned >= faculty.max_students:
-                flash("This faculty just reached maximum capacity. Please select another faculty.", "error")
-                return redirect(url_for("specialization"))
+                raise ValueError("This faculty just reached maximum capacity. Please select another faculty.")
 
             allocation = Allocation(
                 student_id=student.id,
@@ -547,14 +575,27 @@ def confirm_allocation():
                 allocated_at=datetime.utcnow()
             )
             db.session.add(allocation)
-        session.pop("reg_no", None)
-        session.pop("specialization", None)
+
+        # Keep the student on the same page after saving. Do not redirect to a
+        # separate success page, and keep the saved allocation details visible.
         session.pop("selected_faculty_id", None)
-        return render_template("success.html", student=student, allocation=allocation)
+        return render_template(
+            "specialization.html",
+            student=student,
+            specializations=[s.name for s in Specialization.query.order_by(Specialization.name).all()],
+            selected_specialization=specialization_name,
+            faculties=[],
+            selected_faculty=faculty,
+            show_confirmation=True,
+            confirmation_time=allocation.allocated_at.strftime("%d-%m-%Y %H:%M:%S"),
+            saved_confirmation=True,
+            timer_active=round_is_active(),
+            remaining_seconds=0,
+        )
     except IntegrityError:
         db.session.rollback()
         flash("This student has already been allocated. Please check the allocation status.", "error")
-        return redirect(url_for("index"))
+        return redirect(url_for("specialization"))
     except Exception as exc:
         db.session.rollback()
         flash(str(exc), "error")
