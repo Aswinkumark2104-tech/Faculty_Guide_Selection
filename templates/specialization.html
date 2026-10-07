@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Select Specialization{% endblock %}
+{% block title %}Select Specialization & Guide{% endblock %}
 {% block content %}
 <div class="student-round-timer {% if not timer_active %}closed{% endif %}">
   <span>Selection time</span>
@@ -19,6 +19,7 @@ setInterval(async () => {
 },1000);
 setInterval(() => { if(pageActive && pageRemaining>0) pageRemaining--; updatePageTimer(); },1000);
 </script>
+
 <div class="card">
   <p class="step">Step 2 of 3</p>
   <h1>Select Your Specialization</h1>
@@ -28,10 +29,42 @@ setInterval(() => { if(pageActive && pageRemaining>0) pageRemaining--; updatePag
     <select name="specialization" required>
       <option value="">Select Specialization</option>
       {% for spec in specializations %}
-      <option value="{{ spec }}">{{ spec }}</option>
+      <option value="{{ spec }}" {% if selected_specialization and spec|lower == selected_specialization|lower %}selected{% endif %}>{{ spec }}</option>
       {% endfor %}
     </select>
     <button class="btn primary" type="submit">OK &amp; Continue</button>
   </form>
 </div>
+
+{% if selected_specialization %}
+<div class="card">
+  <p class="step">Continue in Step 2</p>
+  <h1>Show All Available Guides</h1>
+  <p>Selected specialization: <strong>{{ selected_specialization }}</strong></p>
+  <p class="muted">All active guides with available seats are shown. Guides are not filtered by specialization.</p>
+</div>
+
+{% if faculties %}
+<div class="faculty-grid">
+{% for item in faculties %}
+<div class="faculty-card">
+  <h2>{{ item.faculty.faculty_name }}</h2>
+  <p><strong>Email:</strong> {{ item.faculty.email or 'Not specified' }}</p>
+  <p><strong>Staff Specialization:</strong> {{ item.faculty.specialization or 'Not specified' }}</p>
+  <p><strong>Assigned:</strong> {{ item.assigned }} / {{ item.faculty.max_students }}</p>
+  <p><strong>Available:</strong> {{ item.available }}</p>
+  <form method="POST" action="{{ url_for('review_allocation') }}">
+    <input type="hidden" name="faculty_id" value="{{ item.faculty.id }}">
+    <button class="btn primary" type="submit">CONFIRM GUIDE</button>
+  </form>
+</div>
+{% endfor %}
+</div>
+{% else %}
+<div class="card empty">
+  <h2>No active guides available</h2>
+  <p>All guides are currently full or inactive. Please contact the administrator.</p>
+</div>
+{% endif %}
+{% endif %}
 {% endblock %}

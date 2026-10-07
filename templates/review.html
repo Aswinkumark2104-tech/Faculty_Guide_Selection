@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Staff Confirmation{% endblock %}
+{% block title %}Confirm Guide{% endblock %}
 {% block content %}
 <div class="student-round-timer {% if not timer_active %}closed{% endif %}">
   <span>Selection time</span>
@@ -19,33 +19,29 @@ setInterval(async () => {
 },1000);
 setInterval(() => { if(pageActive && pageRemaining>0) pageRemaining--; updatePageTimer(); },1000);
 </script>
-<div class="card">
+<div class="card confirmation-card">
   <p class="step">Step 3 of 3</p>
-  <h1>Staff Confirmation</h1>
-  <p><strong>{{ student.name }}</strong> · {{ student.reg_no }}</p>
-  <p>Selected specialization: <strong>{{ specialization }}</strong></p>
-  <p class="muted">Choose any available guide. Guides are not filtered by specialization.</p>
+  <h1>Confirm Your Guide</h1>
+  <p class="muted">Please check the details below before saving your guide selection.</p>
+
+  <div class="summary">
+    <p><span>Guide Name</span><strong>{{ faculty.faculty_name }}</strong></p>
+    <p><span>Guide Email</span><strong>{{ faculty.email or 'Not specified' }}</strong></p>
+    <p><span>Student Name</span><strong>{{ student.name }}</strong></p>
+    <p><span>Register Number</span><strong>{{ student.reg_no }}</strong></p>
+    <p><span>Student Email</span><strong>{{ student.email or 'Not specified' }}</strong></p>
+    <p><span>Specialization</span><strong>{{ specialization }}</strong></p>
+    <p><span>Confirmation Time</span><strong>{{ confirmation_time }}</strong></p>
+  </div>
+
+  <div class="confirmation-actions">
+    <form method="GET" action="{{ url_for('faculty_selection') }}">
+      <button class="btn" type="submit">BACK TO GUIDES</button>
+    </form>
+    <form method="POST" action="{{ url_for('confirm_allocation') }}">
+      <input type="hidden" name="faculty_id" value="{{ faculty.id }}">
+      <button class="btn primary" type="submit">SAVE CONFIRMATION</button>
+    </form>
+  </div>
 </div>
-{% if faculties %}
-<div class="faculty-grid">
-{% for item in faculties %}
-<div class="faculty-card">
-  <h2>{{ item.faculty.faculty_name }}</h2>
-  <p><strong>Email:</strong> {{ item.faculty.email or 'Not specified' }}</p>
-  <p><strong>Specialization:</strong> {{ item.faculty.specialization or 'Not specified' }}</p>
-  <p><strong>Assigned:</strong> {{ item.assigned }} / {{ item.faculty.max_students }}</p>
-  <p><strong>Available:</strong> {{ item.available }}</p>
-  <form method="POST" action="{{ url_for('review_allocation') }}">
-    <input type="hidden" name="faculty_id" value="{{ item.faculty.id }}">
-    <button class="btn primary" type="submit">CONFIRM GUIDE</button>
-  </form>
-</div>
-{% endfor %}
-</div>
-{% else %}
-<div class="card empty">
-  <h2>No active faculty available</h2>
-  <p>Please contact the administrator.</p>
-</div>
-{% endif %}
 {% endblock %}

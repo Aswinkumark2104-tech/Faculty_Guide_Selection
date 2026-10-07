@@ -377,71 +377,126 @@ def specialization():
     if not round_is_active():
         session.pop("reg_no", None)
         session.pop("specialization", None)
+        session.pop("selected_faculty_id", None)
         flash("Student selection is closed. Please wait for the administrator to start the round.", "error")
         return redirect(url_for("index"))
 
-    # This POST is the specialization form. The verified register number must
-    # already be stored in the session by the index/register-number page.
+    # First POST from the register-number screen establishes the student session.
+    # The second POST comes from this specialization form and must NOT require reg_no again.
+    if request.method == "POST":
+        posted_reg_no = request.form.get("reg_no", "").strip()
+        if posted_reg_no:
+            student = Student.query.filter(func.lower(Student.reg_no) == posted_reg_no.lower()).first()
+            if not student:
+                flash("Register number not found. Please enter a valid register number.", "error")
+                return redirect(url_for("index"))
+            if student.allocation:
+                return render_template("already_allocated.html", student=student, allocation=student.allocation)
+            session["reg_no"] = student.reg_no
+            session.pop("specialization", None)
+        else:
+            # Specialization was submitted from the already-authenticated student session.
+            reg_no = session.get("reg_no")
+            student = Student.query.filter_by(reg_no=reg_no).first() if reg_no else None
+            if not student:
+                flash("Register number not found. Please start again.", "error")
+                return redirect(url_for("index"))
+            if student.allocation:
+                return render_template("already_allocated.html", student=student, allocation=student.allocation)
+            selected = request.form.get("specialization", "").strip()
+            valid_spec = Specialization.query.filter(func.lower(Specialization.name) == selected.lower()).first()
+            if not valid_spec:
+                flash("Please select a specialization.", "error")
+                return redirect(url_for("specialization"))
+            session["specialization"] = valid_spec.name
+            session.pop("selected_faculty_id", None)
+
     reg_no = session.get("reg_no")
     if not reg_no:
         return redirect(url_for("index"))
-
-    student = Student.query.filter(func.lower(Student.reg_no) == reg_no.lower()).first()
+    student = Student.query.filter_by(reg_no=reg_no).first()
     if not student:
         session.pop("reg_no", None)
-        session.pop("specialization", None)
-        flash("Register number not found. Please start again.", "error")
         return redirect(url_for("index"))
     if student.allocation:
         return render_template("already_allocated.html", student=student, allocation=student.allocation)
 
-    if request.method == "POST":
-        selected = request.form.get("specialization", "").strip()
-        valid_spec = Specialization.query.filter(func.lower(Specialization.name) == selected.lower()).first()
-        if not valid_spec:
-            flash("Please select a valid specialization.", "error")
-            return redirect(url_for("specialization"))
-        session["specialization"] = valid_spec.name
-        return redirect(url_for("faculty_selection"))
-
     specs = [s.name for s in Specialization.query.order_by(Specialization.name).all()]
+
+    # Step 2 also shows ALL available guides after a specialization is chosen.
+    # Guide availability is based only on status/capacity, never on specialization.
+    specialization_name = session.get("specialization")
+    faculties = []
+    if specialization_name:
+        for faculty in Faculty.query.filter_by(status="Active").order_by(Faculty.faculty_name).all():
+            assigned = Allocation.query.filter_by(faculty_id=faculty.id).count()
+            available = max(faculty.max_students - assigned, 0)
+            if available > 0:
+                faculties.append({
+                    "faculty": faculty,
+                    "assigned": assigned,
+                    "available": available,
+                })
+
     round_settings = get_round_settings()
     remaining_seconds = max(0, int((round_settings.ends_at - datetime.utcnow()).total_seconds())) if round_settings.ends_at else 0
-    return render_template("specialization.html", student=student, specializations=specs, timer_active=round_is_active(), remaining_seconds=remaining_seconds)
+    return render_template(
+        "specialization.html",
+        student=student,
+        specializations=specs,
+        selected_specialization=specialization_name,
+        faculties=faculties,
+        timer_active=round_is_active(),
+        remaining_seconds=remaining_seconds
+    )
 
 
 @app.route("/faculty", methods=["GET"])
 def faculty_selection():
+    # Kept for backwards compatibility with older bookmarks/links.
+    return redirect(url_for("specialization"))
+
+
+@app.route("/review", methods=["POST"])
+def review_allocation():
+    """Show a final staff/guide confirmation screen before saving the allocation."""
     if not round_is_active():
         session.pop("reg_no", None)
         session.pop("specialization", None)
+        session.pop("selected_faculty_id", None)
         flash("The selection timer has ended. Please wait for the next round.", "error")
         return redirect(url_for("index"))
+
     reg_no = session.get("reg_no")
     specialization_name = session.get("specialization")
-    if not reg_no or not specialization_name:
+    faculty_pk = request.form.get("faculty_id", type=int)
+    if not reg_no or not specialization_name or not faculty_pk:
+        flash("Invalid selection. Please start again.", "error")
         return redirect(url_for("index"))
-    student = Student.query.filter_by(reg_no=reg_no).first()
-    if not student:
-        return redirect(url_for("index"))
-    if student.allocation:
-        return render_template("already_allocated.html", student=student, allocation=student.allocation)
 
-    # Show ALL active faculty with available capacity, regardless of the
-    # specialization selected by the student. The student chooses freely.
-    faculties = []
-    for faculty in Faculty.query.filter_by(status="Active").order_by(Faculty.faculty_name).all():
-        assigned = Allocation.query.filter_by(faculty_id=faculty.id).count()
-        available = max(faculty.max_students - assigned, 0)
-        if available > 0:
-            faculties.append({
-                "faculty": faculty,
-                "assigned": assigned,
-                "available": available
-            })
+    student = Student.query.filter_by(reg_no=reg_no).first()
+    faculty = Faculty.query.get(faculty_pk)
+    if not student or not faculty or faculty.status != "Active":
+        flash("The selected guide is no longer available. Please select another guide.", "error")
+        return redirect(url_for("specialization"))
+
+    assigned = Allocation.query.filter_by(faculty_id=faculty.id).count()
+    if assigned >= faculty.max_students:
+        flash("This guide has reached maximum capacity. Please select another guide.", "error")
+        return redirect(url_for("specialization"))
+
+    session["selected_faculty_id"] = faculty.id
     settings = get_round_settings()
     remaining_seconds = max(0, int((settings.ends_at - datetime.utcnow()).total_seconds())) if settings.ends_at else 0
-    return render_template("faculty.html", student=student, specialization=specialization_name, faculties=faculties, timer_active=round_is_active(), remaining_seconds=remaining_seconds)
+    return render_template(
+        "review.html",
+        student=student,
+        faculty=faculty,
+        specialization=specialization_name,
+        confirmation_time=datetime.utcnow().strftime("%d-%m-%Y %H:%M:%S"),
+        timer_active=round_is_active(),
+        remaining_seconds=remaining_seconds,
+    )
 
 
 @app.route("/confirm", methods=["POST"])
@@ -453,7 +508,7 @@ def confirm_allocation():
         return redirect(url_for("index"))
     reg_no = session.get("reg_no")
     specialization_name = session.get("specialization")
-    faculty_pk = request.form.get("faculty_id", type=int)
+    faculty_pk = request.form.get("faculty_id", type=int) or session.get("selected_faculty_id")
 
     if not reg_no or not specialization_name or not faculty_pk:
         flash("Invalid selection. Please start again.", "error")
@@ -483,7 +538,7 @@ def confirm_allocation():
             ).scalar_one()
             if assigned >= faculty.max_students:
                 flash("This faculty just reached maximum capacity. Please select another faculty.", "error")
-                return redirect(url_for("faculty_selection"))
+                return redirect(url_for("specialization"))
 
             allocation = Allocation(
                 student_id=student.id,
@@ -494,6 +549,7 @@ def confirm_allocation():
             db.session.add(allocation)
         session.pop("reg_no", None)
         session.pop("specialization", None)
+        session.pop("selected_faculty_id", None)
         return render_template("success.html", student=student, allocation=allocation)
     except IntegrityError:
         db.session.rollback()
@@ -502,7 +558,7 @@ def confirm_allocation():
     except Exception as exc:
         db.session.rollback()
         flash(str(exc), "error")
-        return redirect(url_for("faculty_selection"))
+        return redirect(url_for("specialization"))
 
 
 @app.route("/admin/login", methods=["GET", "POST"])
@@ -646,70 +702,6 @@ def edit_student(student_id):
         student.email = email
         db.session.commit()
         flash("Student updated successfully.", "success")
-    return redirect(url_for("admin_dashboard"))
-
-
-@app.route("/admin/student/<int:student_id>/delete", methods=["POST"])
-@admin_required
-def delete_student(student_id):
-    student = Student.query.get_or_404(student_id)
-    if student.allocation:
-        flash("This student already has a faculty allocation. Reset student selections before deleting the student.", "error")
-        return redirect(url_for("admin_dashboard"))
-    db.session.delete(student)
-    db.session.commit()
-    flash(f"Student {student.name} was removed.", "success")
-    return redirect(url_for("admin_dashboard"))
-
-
-@app.route("/admin/faculty/add", methods=["POST"])
-@admin_required
-def add_faculty():
-    name = request.form.get("faculty_name", "").strip()
-    email = request.form.get("email", "").strip()
-    role = request.form.get("role", "").strip()
-    spec = request.form.get("specialization", "").strip()
-    status = request.form.get("status", "Active").strip()
-    max_students = request.form.get("max_students", type=int)
-
-    if not name:
-        flash("Faculty name is required.", "error")
-        return redirect(url_for("admin_dashboard"))
-    if not max_students or max_students < 1:
-        flash("Maximum students must be at least 1.", "error")
-        return redirect(url_for("admin_dashboard"))
-    if email and Faculty.query.filter(func.lower(Faculty.email) == email.lower()).first():
-        flash("A faculty member with this email already exists.", "error")
-        return redirect(url_for("admin_dashboard"))
-
-    faculty = Faculty(
-        faculty_id=generate_faculty_id(),
-        faculty_name=name,
-        email=email,
-        role=role,
-        specialization=spec or None,
-        max_students=max_students,
-        status="Active" if status == "Active" else "Inactive"
-    )
-    db.session.add(faculty)
-    if spec and not Specialization.query.filter(func.lower(Specialization.name) == spec.lower()).first():
-        db.session.add(Specialization(name=spec))
-    db.session.commit()
-    flash(f"Faculty {name} added successfully.", "success")
-    return redirect(url_for("admin_dashboard"))
-
-
-@app.route("/admin/faculty/<int:faculty_pk>/delete", methods=["POST"])
-@admin_required
-def delete_faculty(faculty_pk):
-    faculty = Faculty.query.get_or_404(faculty_pk)
-    assigned = Allocation.query.filter_by(faculty_id=faculty.id).count()
-    if assigned:
-        flash(f"Cannot remove {faculty.faculty_name} because {assigned} student(s) are allocated to this faculty. Reset selections first.", "error")
-        return redirect(url_for("admin_dashboard"))
-    db.session.delete(faculty)
-    db.session.commit()
-    flash(f"Faculty {faculty.faculty_name} was removed.", "success")
     return redirect(url_for("admin_dashboard"))
 
 
