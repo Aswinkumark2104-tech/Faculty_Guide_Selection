@@ -16,6 +16,9 @@ app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "dev-secret-change-me")
 database_url = os.environ.get("DATABASE_URL", "").strip()
 if database_url.startswith("postgres://"):
     database_url = database_url.replace("postgres://", "postgresql://", 1)
+# Force SQLAlchemy to use the installed psycopg2 driver on Render.
+if database_url.startswith("postgresql://"):
+    database_url = database_url.replace("postgresql://", "postgresql+psycopg2://", 1)
 
 if database_url:
     app.config["SQLALCHEMY_DATABASE_URI"] = database_url
